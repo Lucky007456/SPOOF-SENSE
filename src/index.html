@@ -1,0 +1,664 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Spoof Sense — Live GPS Threat Monitor</title>
+<link rel="stylesheet" href="style.css"/>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css"/>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.heat/0.2.0/leaflet-heat.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<!-- Supabase CDN -->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+</head>
+<body>
+
+<!-- ── SUPABASE CONFIG MODAL ── -->
+<div class="modal-overlay" id="sbModal">
+  <div class="modal">
+    <h2>SUPABASE SETUP</h2>
+    <p>Enter your Supabase project URL and anon key to enable persistent threat logging.<br/>Leave blank to run in local-only mode.</p>
+    <div class="modal-field">
+      <label>PROJECT URL</label>
+      <input id="sbUrl" type="text" placeholder="https://xxxx.supabase.co" autocomplete="off"/>
+    </div>
+    <div class="modal-field">
+      <label>ANON KEY</label>
+      <input id="sbKey" type="password" placeholder="eyJhbGciOiJIUzI1..." autocomplete="off"/>
+    </div>
+    <div class="modal-actions">
+      <button class="modal-btn secondary" onclick="skipSupabase()">SKIP — LOCAL ONLY</button>
+      <button class="modal-btn primary"   onclick="initSupabase()">CONNECT DB</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── FULL-SCREEN MAP ── -->
+<div id="map"></div>
+
+<!-- ── TOPBAR ── -->
+<div id="topbar">
+  <div class="logo">SPOOF<span>_</span>SENSE</div>
+  <div class="tb-divider"></div>
+  <div class="ws-row">
+    <label>WS</label>
+    <input id="wsUrl" type="text" value="ws://192.168.1.100:81" placeholder="ws://ESP32-IP:81"/>
+    <button class="tbtn" id="btnConn" onclick="connectWS()">CONNECT</button>
+    <button class="tbtn disc hidden" id="btnDisc" onclick="disconnectWS()">DISCONNECT</button>
+  </div>
+  <div class="cpill offline" id="cpill">
+    <div class="dot"></div><span id="cpillTxt">OFFLINE</span>
+  </div>
+  <div class="tb-divider"></div>
+  <div class="topstats">
+    <div class="tstat"><div class="tstat-val c-green"  id="ts-n">0</div><div class="tstat-lbl">NORMAL</div></div>
+    <div class="tstat"><div class="tstat-val c-yellow" id="ts-j">0</div><div class="tstat-lbl">JAMMED</div></div>
+    <div class="tstat"><div class="tstat-val c-red"    id="ts-s">0</div><div class="tstat-lbl">SPOOFED</div></div>
+    <div class="tstat"><div class="tstat-val"          id="ts-up">00:00</div><div class="tstat-lbl">UPTIME</div></div>
+  </div>
+  <div class="tb-divider"></div>
+  <!-- Theme toggle -->
+  <span class="theme-icon">🌙</span>
+  <div class="theme-toggle" id="themeToggle" onclick="toggleTheme()" title="Toggle theme"></div>
+  <span class="theme-icon">☀️</span>
+</div>
+
+<!-- ── DB STATUS STRIP ── -->
+<div id="db-strip">
+  <div class="db-indicator">
+    <div class="db-dot err" id="dbDot"></div>
+    <span class="db-lbl">SUPABASE</span>
+    <span class="db-val" id="dbStatus">NOT CONNECTED</span>
+  </div>
+  <div class="tb-divider" style="height:16px"></div>
+  <div class="db-indicator">
+    <span class="db-lbl">RECORDS SAVED</span>
+    <span class="db-val c-cyan" id="dbCount" style="color:var(--cyan)">0</span>
+  </div>
+  <div class="tb-divider" style="height:16px"></div>
+  <div class="db-indicator">
+    <span class="db-lbl">TABLE</span>
+    <span class="db-val" style="color:var(--violet)">gps_events</span>
+  </div>
+</div>
+
+<!-- ── LEFT PANEL ── -->
+<div id="panel-left">
+
+  <!-- Status Card -->
+  <div class="card">
+    <div class="card-hd">
+      <span class="card-title">SIGNAL STATUS</span>
+      <span class="card-sub" id="lastUpd">--</span>
+    </div>
+    <div class="big-status" id="bigStatus">
+      <span class="bs-label">CURRENT STATE</span>
+      <span class="bs-icon" id="bsIcon">🛡️</span>
+      <span class="bs-val" id="bsVal" style="color:var(--green);text-shadow:0 0 30px var(--green)">NORMAL</span>
+      <span class="bs-detail" id="bsDetail">Waiting for data...</span>
+    </div>
+    <div class="metrics">
+      <div class="metric"><div class="metric-lbl">HDOP</div><div class="metric-val" id="mHdop">--</div></div>
+      <div class="metric"><div class="metric-lbl">SATELLITES</div><div class="metric-val" id="mSat">--</div></div>
+      <div class="metric"><div class="metric-lbl">SPEED</div><div class="metric-val" id="mSpd">--<span class="metric-unit">m/s</span></div></div>
+      <div class="metric"><div class="metric-lbl">LAST FIX</div><div class="metric-val" id="mFix" style="font-size:11px">--</div></div>
+    </div>
+    <div class="threat-wrap">
+      <div class="threat-lbl"><span>THREAT LEVEL</span><strong id="threatPct">0%</strong></div>
+      <div class="threat-track">
+        <div class="threat-fill" id="threatFill" style="width:0%"></div>
+        <div class="threat-marker" id="threatMarker" style="left:0%"></div>
+      </div>
+    </div>
+    <div class="coords">
+      <div class="coord-item"><div class="coord-lbl">LATITUDE</div><div class="coord-val" id="cLat">--</div></div>
+      <div class="coord-item"><div class="coord-lbl">LONGITUDE</div><div class="coord-val" id="cLng">--</div></div>
+    </div>
+  </div>
+
+  <!-- SNR Chart Card -->
+  <div class="card snr-card">
+    <div class="card-hd">
+      <span class="card-title">SIGNAL STRENGTH</span>
+      <span class="card-sub">SNR · dB</span>
+    </div>
+    <div class="card-body">
+      <canvas id="snrChart" class="snr-canvas"></canvas>
+    </div>
+  </div>
+
+  <!-- Daily Stats Card -->
+  <div class="card">
+    <div class="card-hd">
+      <span class="card-title">TODAY'S STATS</span>
+      <span class="card-sub" id="statsDate">--</span>
+    </div>
+    <div class="stats-grid">
+      <div class="stat-box">
+        <div class="stat-box-lbl">TOTAL EVENTS</div>
+        <div class="stat-box-val c-cyan" id="st-total">0</div>
+        <div class="stat-box-sub">packets received</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-box-lbl">UPTIME %</div>
+        <div class="stat-box-val c-green" id="st-uptime">100%</div>
+        <div class="stat-box-sub">signal lock</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-box-lbl">JAM EVENTS</div>
+        <div class="stat-box-val c-yellow" id="st-jam">0</div>
+        <div class="stat-box-sub">detected today</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-box-lbl">SPOOF EVENTS</div>
+        <div class="stat-box-val c-red" id="st-spoof">0</div>
+        <div class="stat-box-sub">detected today</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-box-lbl">AVG SATS</div>
+        <div class="stat-box-val" id="st-sats">--</div>
+        <div class="stat-box-sub">satellites</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-box-lbl">AVG HDOP</div>
+        <div class="stat-box-val" id="st-hdop">--</div>
+        <div class="stat-box-sub">precision</div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<!-- ── RIGHT PANEL — ALERT LOG ── -->
+<div id="panel-right">
+  <div class="card flex flex-col" style="flex:1;min-height:0;">
+    <div class="card-hd">
+      <span class="card-title">THREAT LOG</span>
+      <span class="card-sub">LIVE · SUPABASE SYNCED</span>
+    </div>
+    <div class="log-ctrl">
+      <button class="lbtn exp" onclick="exportCSV()">EXPORT CSV</button>
+      <button class="lbtn clr" onclick="clearLog()">CLEAR</button>
+      <span class="log-count-badge" id="logCount">0 EVENTS</span>
+    </div>
+    <div class="log-scroll flex-1" id="logScroll">
+      <div class="log-empty">🛰️<br/>No threats detected<br/>System monitoring active</div>
+    </div>
+  </div>
+</div>
+
+<!-- ── BOTTOM PANEL — IMU + SNR ── -->
+<div id="panel-bottom">
+  <div class="card">
+    <div class="card-hd">
+      <span class="card-title">IMU TELEMETRY</span>
+      <span class="card-sub">60-SAMPLE ROLLING WINDOW</span>
+    </div>
+    <div class="card-body">
+      <div class="imu-section"><label>ACCEL X·Y·Z (m/s²)</label><canvas id="accelChart"></canvas></div>
+      <div class="imu-section"><label>GYRO X·Y·Z (rad/s)</label><canvas id="gyroChart"></canvas></div>
+      <div class="imu-section"><label>SPEED COMPARISON (m/s)</label><canvas id="spdChart"></canvas></div>
+    </div>
+  </div>
+</div>
+
+<!-- ── LEGEND ── -->
+<div id="legend">
+  <div class="leg-item"><div class="leg-dot" style="background:var(--green)"></div>NORMAL</div>
+  <div class="leg-item"><div class="leg-dot" style="background:var(--yellow)"></div>JAMMED</div>
+  <div class="leg-item"><div class="leg-dot" style="background:var(--red)"></div>SPOOFED</div>
+  <div class="leg-item"><div class="leg-dot" style="background:var(--cyan);opacity:.4"></div>TRAIL</div>
+  <div class="leg-item"><div class="leg-dot" style="background:var(--red);opacity:.3;width:12px;height:12px;border-radius:2px"></div>HEATMAP</div>
+</div>
+
+<!-- ── TOASTS ── -->
+<div id="toasts"></div>
+
+<!-- ════════════════════════════════════════════════════════════
+     JAVASCRIPT
+     ════════════════════════════════════════════════════════════ -->
+<script>
+// ── THEME ──────────────────────────────────────────────────────
+let isDark = true;
+function toggleTheme() {
+  isDark = !isDark;
+  document.documentElement.setAttribute('data-theme', isDark ? 'dark' : 'light');
+  localStorage.setItem('ss-theme', isDark ? 'dark' : 'light');
+}
+(function() {
+  const saved = localStorage.getItem('ss-theme');
+  if (saved === 'light') { isDark = false; document.documentElement.setAttribute('data-theme','light'); }
+})();
+
+// ── SUPABASE ───────────────────────────────────────────────────
+let supabase = null, dbSaveCount = 0;
+
+function initSupabase() {
+  const url = document.getElementById('sbUrl').value.trim();
+  const key = document.getElementById('sbKey').value.trim();
+  if (!url || !key) { alert('Please enter both URL and key.'); return; }
+  try {
+    supabase = window.supabase.createClient(url, key);
+    localStorage.setItem('sb-url', url);
+    localStorage.setItem('sb-key', key);
+    document.getElementById('sbModal').classList.add('hidden');
+    document.getElementById('dbDot').className    = 'db-dot ok';
+    document.getElementById('dbStatus').textContent = 'CONNECTED';
+    toast('Supabase connected ✓', 'db');
+    loadFromSupabase();
+  } catch(e) {
+    alert('Supabase init failed: ' + e.message);
+  }
+}
+
+function skipSupabase() {
+  document.getElementById('sbModal').classList.add('hidden');
+  document.getElementById('dbStatus').textContent = 'LOCAL ONLY';
+  toast('Running in local-only mode', 'info');
+}
+
+// Auto-reconnect if saved credentials
+(function() {
+  const url = localStorage.getItem('sb-url');
+  const key = localStorage.getItem('sb-key');
+  if (url && key) {
+    document.getElementById('sbUrl').value = url;
+    document.getElementById('sbKey').value = key;
+    setTimeout(initSupabase, 300);
+  }
+})();
+
+async function saveToSupabase(data) {
+  if (!supabase) return;
+  try {
+    document.getElementById('dbDot').className = 'db-dot saving';
+    const { error } = await supabase.from('gps_events').insert([{
+      status:     data.status,
+      latitude:   data.lat,
+      longitude:  data.lng,
+      speed_mps:  data.speed_mps,
+      satellites: data.satellites,
+      hdop:       data.hdop,
+      ax: data.ax, ay: data.ay, az: data.az,
+      gx: data.gx, gy: data.gy, gz: data.gz,
+      snr:        data.snr || 0,
+      created_at: new Date().toISOString()
+    }]);
+    if (!error) {
+      dbSaveCount++;
+      document.getElementById('dbCount').textContent = dbSaveCount;
+      document.getElementById('dbDot').className = 'db-dot ok';
+    } else {
+      document.getElementById('dbDot').className = 'db-dot err';
+    }
+  } catch(e) {
+    document.getElementById('dbDot').className = 'db-dot err';
+  }
+}
+
+async function loadFromSupabase() {
+  if (!supabase) return;
+  try {
+    const today = new Date(); today.setHours(0,0,0,0);
+    const { data, error } = await supabase
+      .from('gps_events')
+      .select('*')
+      .gte('created_at', today.toISOString())
+      .order('created_at', { ascending: false })
+      .limit(200);
+    if (!error && data) {
+      dbSaveCount = data.length;
+      document.getElementById('dbCount').textContent = dbSaveCount;
+      data.filter(r => r.status !== 'NORMAL').forEach(r => {
+        addAlertRow({
+          n: ++alertCount,
+          ts: new Date(r.created_at).toLocaleTimeString(),
+          event: r.status,
+          lat: Number(r.latitude).toFixed(4),
+          lng: Number(r.longitude).toFixed(4),
+          detail: r.status === 'JAMMED' ? 'Loaded from Supabase' : 'Loaded from Supabase',
+          fromDB: true
+        });
+        heatData.push([Number(r.latitude), Number(r.longitude), r.status === 'SPOOFED' ? 1.0 : 0.6]);
+      });
+      refreshHeatmap();
+      toast(`Loaded ${data.length} records from Supabase`, 'db');
+    }
+  } catch(e) {}
+}
+
+// ── SQL SCHEMA shown as comment ──
+/*
+  Run this in your Supabase SQL editor:
+
+  create table gps_events (
+    id          bigserial primary key,
+    status      text not null,
+    latitude    double precision,
+    longitude   double precision,
+    speed_mps   double precision,
+    satellites  integer,
+    hdop        double precision,
+    ax          double precision, ay double precision, az double precision,
+    gx          double precision, gy double precision, gz double precision,
+    snr         double precision,
+    created_at  timestamptz default now()
+  );
+  alter table gps_events enable row level security;
+  create policy "Allow anon insert" on gps_events for insert to anon with check (true);
+  create policy "Allow anon select" on gps_events for select to anon using (true);
+*/
+
+// ── MAP ────────────────────────────────────────────────────────
+const map = L.map('map', { zoomControl: true, attributionControl: false }).setView([20, 78], 5);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
+
+// Heatmap layer
+let heatData = [];
+let heatLayer = L.heatLayer([], { radius: 35, blur: 20, maxZoom: 10, gradient: { 0.3:'#ffcc00', 0.6:'#ff7a00', 1.0:'#ff3b5c' } }).addTo(map);
+function refreshHeatmap() { heatLayer.setLatLngs(heatData); }
+
+// Marker icons
+const colorMap = { NORMAL: '#00ff9d', JAMMED: '#ffcc00', SPOOFED: '#ff3b5c' };
+function makeIcon(color, size = 14) {
+  return L.divIcon({
+    className: '',
+    html: `<div style="width:${size}px;height:${size}px;border-radius:50%;background:${color};border:2px solid rgba(255,255,255,0.8);box-shadow:0 0 12px ${color},0 0 24px ${color}66;"></div>`,
+    iconSize: [size, size], iconAnchor: [size/2, size/2]
+  });
+}
+
+let mainMarker = null, pulseCircle = null;
+const trailMarkers = [];
+
+function updateMap(lat, lng, status) {
+  const color = colorMap[status] || '#00ff9d';
+  if (pulseCircle) map.removeLayer(pulseCircle);
+  if (status !== 'NORMAL') {
+    pulseCircle = L.circle([lat, lng], {
+      radius: 10000, color, fill: false, weight: 1.5,
+      opacity: 0.5, dashArray: '6 4', className: 'zone-ring'
+    }).addTo(map);
+  }
+  if (trailMarkers.length >= 25) map.removeLayer(trailMarkers.shift());
+  trailMarkers.push(L.marker([lat, lng], { icon: makeIcon('rgba(0,212,255,0.2)', 6) }).addTo(map));
+  if (mainMarker) map.removeLayer(mainMarker);
+  mainMarker = L.marker([lat, lng], { icon: makeIcon(color, 14) })
+    .addTo(map).bindTooltip(`<b>${status}</b><br>${lat.toFixed(5)}, ${lng.toFixed(5)}`, { direction: 'top' });
+  map.panTo([lat, lng], { animate: true, duration: 0.5 });
+  // Add to heatmap on threat
+  if (status !== 'NORMAL') {
+    heatData.push([lat, lng, status === 'SPOOFED' ? 1.0 : 0.6]);
+    if (heatData.length > 500) heatData.shift();
+    refreshHeatmap();
+  }
+}
+
+// ── CHARTS ─────────────────────────────────────────────────────
+const MAX_PTS = 60;
+Chart.defaults.color = '#4a7a8a';
+Chart.defaults.borderColor = 'rgba(0,212,255,0.05)';
+
+function mkChart(id, datasets, opts = {}) {
+  return new Chart(document.getElementById(id), {
+    type: 'line',
+    data: { labels: Array(MAX_PTS).fill(''), datasets },
+    options: {
+      responsive: true, maintainAspectRatio: false, animation: false,
+      plugins: { legend: { labels: { color: '#4a7a8a', font: { family: "'JetBrains Mono'", size: 8 }, boxWidth: 10, padding: 6 } } },
+      scales: {
+        x: { ticks: { display: false }, grid: { color: 'rgba(0,212,255,0.05)' } },
+        y: { ticks: { color: '#4a7a8a', font: { size: 8 }, maxTicksLimit: 4 }, grid: { color: 'rgba(0,212,255,0.05)' }, ...opts.y }
+      }
+    }
+  });
+}
+
+const accelChart = mkChart('accelChart', [
+  { label: 'ax', data: Array(MAX_PTS).fill(0), borderColor:'#00d4ff', borderWidth:1.2, pointRadius:0, tension:0.4 },
+  { label: 'ay', data: Array(MAX_PTS).fill(0), borderColor:'#00ff9d', borderWidth:1.2, pointRadius:0, tension:0.4 },
+  { label: 'az', data: Array(MAX_PTS).fill(0), borderColor:'#ff3b5c', borderWidth:1.2, pointRadius:0, tension:0.4 },
+]);
+const gyroChart = mkChart('gyroChart', [
+  { label: 'gx', data: Array(MAX_PTS).fill(0), borderColor:'#bf5af2', borderWidth:1.2, pointRadius:0, tension:0.4 },
+  { label: 'gy', data: Array(MAX_PTS).fill(0), borderColor:'#ffcc00', borderWidth:1.2, pointRadius:0, tension:0.4 },
+  { label: 'gz', data: Array(MAX_PTS).fill(0), borderColor:'#ff7a00', borderWidth:1.2, pointRadius:0, tension:0.4 },
+]);
+const spdChart = mkChart('spdChart', [
+  { label: 'GPS spd', data: Array(MAX_PTS).fill(0), borderColor:'#00ff9d', borderWidth:1.5, pointRadius:0, tension:0.4 },
+  { label: 'IMU est', data: Array(MAX_PTS).fill(0), borderColor:'#ff3b5c', borderWidth:1.5, pointRadius:0, tension:0.4, borderDash:[4,3] },
+]);
+
+// SNR chart (left panel)
+const snrChart = mkChart('snrChart', [
+  { label: 'SNR dB', data: Array(30).fill(0), borderColor:'#00d4ff', borderWidth:1.5, pointRadius:0, tension:0.4,
+    fill: true, backgroundColor: 'rgba(0,212,255,0.06)' },
+], { y: { min: 0, max: 50 } });
+snrChart.data.labels = Array(30).fill('');
+
+function pushChart(c, v) {
+  c.data.datasets.forEach((d, i) => { d.data.push(v[i]); if (d.data.length > MAX_PTS) d.data.shift(); });
+  c.update('none');
+}
+function pushSnr(snr) {
+  snrChart.data.datasets[0].data.push(snr);
+  if (snrChart.data.datasets[0].data.length > 30) snrChart.data.datasets[0].data.shift();
+  snrChart.update('none');
+}
+
+// ── ALERT LOG ──────────────────────────────────────────────────
+const alerts = []; let alertCount = 0;
+const detailMsg = {
+  JAMMED:  d => d.satellites < 3 ? 'Satellite count below threshold' : d.hdop > 10 ? 'HDOP exceeded tolerance' : 'GPS fix lost >10s',
+  SPOOFED: d => d.speed_mps > 83 ? 'Speed exceeds physical limit' : 'GPS/IMU velocity mismatch >5m/s'
+};
+
+function addAlertRow(row) {
+  alerts.unshift(row);
+  if (alerts.length > 100) alerts.pop();
+  renderLog();
+}
+
+function addAlert(d) {
+  if (d.status === 'NORMAL') return;
+  alertCount++;
+  addAlertRow({
+    n: alertCount, ts: new Date().toLocaleTimeString(),
+    event: d.status,
+    lat: d.lat.toFixed(4), lng: d.lng.toFixed(4),
+    detail: detailMsg[d.status]?.(d) || '',
+    fromDB: false
+  });
+}
+
+function renderLog() {
+  const s = document.getElementById('logScroll');
+  if (!alerts.length) {
+    s.innerHTML = '<div class="log-empty">🛰️<br/>No threats detected<br/>System monitoring active</div>';
+    return;
+  }
+  s.innerHTML = alerts.map(r => `
+    <div class="log-entry ev-${r.event}">
+      <div class="log-num">${r.n}</div>
+      <div class="log-main">
+        <span class="log-evt ${r.event}">${r.event}</span>
+        <span class="log-detail">${r.detail}</span>
+        <span class="log-coords">${r.lat}, ${r.lng}</span>
+        ${r.fromDB ? '<span class="log-db-badge">DB</span>' : ''}
+      </div>
+      <div class="log-time">${r.ts}</div>
+    </div>`).join('');
+  document.getElementById('logCount').textContent = `${alerts.length} EVENTS`;
+}
+
+function exportCSV() {
+  if (!alerts.length) return;
+  const h = '#,Time,Event,Lat,Lng,Detail,Source';
+  const rows = alerts.map(r => `${r.n},${r.ts},${r.event},${r.lat},${r.lng},"${r.detail}",${r.fromDB?'DB':'LIVE'}`);
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([h+'\n'+rows.join('\n')], { type:'text/csv' }));
+  a.download = 'spoof_sense_threats.csv'; a.click();
+  toast('Exported to CSV', 'info');
+}
+function clearLog() { alerts.length = 0; alertCount = 0; renderLog(); toast('Log cleared', 'info'); }
+
+// ── DAILY STATS ────────────────────────────────────────────────
+const stats = { total:0, jam:0, spoof:0, satSum:0, hdopSum:0 };
+function updateStats(d) {
+  stats.total++;
+  if (d.status === 'JAMMED')  stats.jam++;
+  if (d.status === 'SPOOFED') stats.spoof++;
+  stats.satSum  += d.satellites;
+  stats.hdopSum += d.hdop;
+  document.getElementById('st-total').textContent  = stats.total;
+  document.getElementById('st-jam').textContent    = stats.jam;
+  document.getElementById('st-spoof').textContent  = stats.spoof;
+  document.getElementById('st-sats').textContent   = (stats.satSum / stats.total).toFixed(1);
+  document.getElementById('st-hdop').textContent   = (stats.hdopSum / stats.total).toFixed(2);
+  const normalPct = Math.round(((stats.total - stats.jam - stats.spoof) / stats.total) * 100);
+  document.getElementById('st-uptime').textContent = normalPct + '%';
+  document.getElementById('statsDate').textContent = new Date().toLocaleDateString();
+}
+
+// ── TOPBAR COUNTERS ────────────────────────────────────────────
+const cnt = { NORMAL:0, JAMMED:0, SPOOFED:0 };
+
+// ── MAIN UPDATE ────────────────────────────────────────────────
+let lastStatus = 'NORMAL';
+const colors = { NORMAL:'var(--green)', JAMMED:'var(--yellow)', SPOOFED:'var(--red)' };
+const glows  = { NORMAL:'var(--green-dim)', JAMMED:'var(--yellow-dim)', SPOOFED:'var(--red-dim)' };
+const icons  = { NORMAL:'🛡️', JAMMED:'📡', SPOOFED:'⚠️' };
+const subs   = { NORMAL:'All parameters nominal', JAMMED:'Signal blockage detected', SPOOFED:'Fake coordinates injected' };
+
+function update(d) {
+  const s = d.status, now = new Date().toLocaleTimeString();
+
+  // topbar
+  cnt[s] = (cnt[s]||0) + 1;
+  document.getElementById('ts-n').textContent = cnt.NORMAL;
+  document.getElementById('ts-j').textContent = cnt.JAMMED;
+  document.getElementById('ts-s').textContent = cnt.SPOOFED;
+
+  // status card
+  const bs = document.getElementById('bigStatus');
+  bs.style.setProperty('--status-color', colors[s] || 'var(--green)');
+  bs.style.setProperty('--status-glow',  glows[s]  || 'var(--green-dim)');
+  document.getElementById('bsIcon').textContent   = icons[s] || '🛡️';
+  document.getElementById('bsVal').textContent    = s;
+  document.getElementById('bsVal').style.color    = `var(--${s === 'NORMAL' ? 'green' : s === 'JAMMED' ? 'yellow' : 'red'})`;
+  document.getElementById('bsVal').style.textShadow = `0 0 30px var(--${s === 'NORMAL' ? 'green' : s === 'JAMMED' ? 'yellow' : 'red'})`;
+  document.getElementById('bsDetail').textContent = subs[s] || '';
+  document.getElementById('lastUpd').textContent  = now;
+
+  // metrics
+  document.getElementById('mHdop').textContent = d.hdop.toFixed(1);
+  document.getElementById('mSat').textContent  = d.satellites;
+  document.getElementById('mSpd').innerHTML    = d.speed_mps.toFixed(1) + '<span class="metric-unit">m/s</span>';
+  document.getElementById('mFix').textContent  = now;
+  document.getElementById('cLat').textContent  = d.lat.toFixed(5);
+  document.getElementById('cLng').textContent  = d.lng.toFixed(5);
+
+  // threat meter
+  const pct = s === 'SPOOFED' ? 88 + Math.random()*12 : s === 'JAMMED' ? 52 + Math.random()*22 : Math.random()*14;
+  document.getElementById('threatPct').textContent   = Math.round(pct) + '%';
+  document.getElementById('threatFill').style.width  = pct + '%';
+  document.getElementById('threatMarker').style.left = pct + '%';
+
+  // map
+  updateMap(d.lat, d.lng, s);
+
+  // charts
+  pushChart(accelChart, [d.ax, d.ay, d.az]);
+  pushChart(gyroChart,  [d.gx, d.gy, d.gz]);
+  pushChart(spdChart,   [d.speed_mps, d.imu_speed || Math.abs(d.ax + d.ay)]);
+  pushSnr(d.snr || (s === 'JAMMED' ? 5 + Math.random()*10 : 30 + Math.random()*15));
+
+  // daily stats
+  updateStats(d);
+
+  // alerts + toast
+  if (s !== lastStatus) {
+    if (s === 'JAMMED')        toast('⚠ JAMMING DETECTED', 'jammed');
+    else if (s === 'SPOOFED')  toast('🚨 SPOOFING DETECTED', 'spoofed');
+    else                       toast('✓ Signal nominal', 'normal');
+    lastStatus = s;
+  }
+  if (s !== 'NORMAL') {
+    addAlert(d);
+    saveToSupabase(d);  // only save threat events to DB
+  }
+}
+
+// ── UPTIME ─────────────────────────────────────────────────────
+let startTime = Date.now();
+setInterval(() => {
+  const sec = Math.floor((Date.now() - startTime) / 1000);
+  const m = Math.floor(sec/60), s = sec%60;
+  document.getElementById('ts-up').textContent = String(m).padStart(2,'0') + ':' + String(s).padStart(2,'0');
+}, 1000);
+
+// ── TOAST ──────────────────────────────────────────────────────
+function toast(msg, type = 'info') {
+  const c = document.getElementById('toasts'), t = document.createElement('div');
+  t.className = `toast ${type}`; t.textContent = msg; c.appendChild(t);
+  setTimeout(() => t.remove(), 3200);
+}
+
+// ── WEBSOCKET ──────────────────────────────────────────────────
+let ws = null, reconnTimer = null, mockTimer = null;
+
+function setPill(state) {
+  const p = document.getElementById('cpill'), tx = document.getElementById('cpillTxt');
+  p.className = 'cpill ' + state;
+  const labels = { live:'LIVE', mock:'MOCK', retrying:'RETRYING', offline:'OFFLINE' };
+  tx.textContent = labels[state] || 'OFFLINE';
+}
+
+function connectWS() {
+  const url = document.getElementById('wsUrl').value.trim(); if (!url) return;
+  clearTimeout(reconnTimer); stopMock();
+  ws = new WebSocket(url); setPill('retrying');
+  ws.onopen    = () => { setPill('live'); toast('Connected to ESP32', 'info'); document.getElementById('btnConn').classList.add('hidden'); document.getElementById('btnDisc').classList.remove('hidden'); };
+  ws.onmessage = e => { try { update(JSON.parse(e.data)); } catch(_) {} };
+  ws.onclose   = () => { setPill('retrying'); toast('Connection lost — retrying', 'jammed'); reconnTimer = setTimeout(connectWS, 3000); document.getElementById('btnConn').classList.remove('hidden'); document.getElementById('btnDisc').classList.add('hidden'); };
+  ws.onerror   = () => { ws.close(); startMock(); };
+}
+function disconnectWS() {
+  clearTimeout(reconnTimer); stopMock(); if (ws) ws.close(); setPill('offline');
+  document.getElementById('btnConn').classList.remove('hidden'); document.getElementById('btnDisc').classList.add('hidden');
+}
+
+// ── MOCK DATA ──────────────────────────────────────────────────
+let mPhase = 0, mTick = 0, mLat = 13.0827, mLng = 80.2707;
+const mSeq = ['NORMAL','NORMAL','NORMAL','NORMAL','JAMMED','NORMAL','SPOOFED','NORMAL','NORMAL','NORMAL'];
+
+function stopMock() { if (mockTimer) { clearInterval(mockTimer); mockTimer = null; } }
+
+function startMock() {
+  setPill('mock'); toast('ESP32 offline — mock mode active', 'info');
+  document.getElementById('btnConn').classList.remove('hidden'); document.getElementById('btnDisc').classList.add('hidden');
+  mockTimer = setInterval(() => {
+    mTick++; if (mTick % 8 === 0) mPhase = (mPhase + 1) % mSeq.length;
+    const s = mSeq[mPhase];
+    if (s === 'SPOOFED') { mLat += (Math.random()-.5)*.04; mLng += (Math.random()-.5)*.04; }
+    else { mLat += (Math.random()-.5)*.0002; mLng += (Math.random()-.5)*.0002; }
+    const imu_speed = Math.abs((Math.random()-.5)*2 + (Math.random()-.5)*2);
+    update({
+      status: s, lat: mLat, lng: mLng,
+      speed_mps:  s === 'SPOOFED' ? 95 + Math.random()*15 : Math.random()*4,
+      imu_speed,
+      satellites: s === 'JAMMED' ? Math.floor(Math.random()*2) : 7 + Math.floor(Math.random()*4),
+      hdop:       s === 'JAMMED' ? 12 + Math.random()*6 : 0.9 + Math.random()*.8,
+      ax: (Math.random()-.5)*2, ay: (Math.random()-.5)*2, az: 9.78+(Math.random()-.5)*.4,
+      gx: (Math.random()-.5)*.12, gy: (Math.random()-.5)*.12, gz: (Math.random()-.5)*.08,
+      snr: s === 'JAMMED' ? 4+Math.random()*8 : 28+Math.random()*18,
+      timestamp: Date.now()
+    });
+  }, 1000);
+}
+
+window.onload = () => setTimeout(startMock, 500);
+</script>
+</body>
+</html>

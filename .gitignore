@@ -1,0 +1,42 @@
+# ── OS Files ──────────────────────────────────
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# ── IDE / Editor ──────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.settings/
+
+# ── Environment & Secrets ─────────────────────
+.env
+.env.local
+.env.*.local
+*.key
+*.pem
+
+# ── Node (if using local server) ──────────────
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+package-lock.json
+
+# ── Build Output ──────────────────────────────
+dist/
+build/
+out/
+
+# ── Logs ──────────────────────────────────────
+*.log
+logs/
+
+# ── Misc ──────────────────────────────────────
+*.bak
+*.tmp
+*.cache
