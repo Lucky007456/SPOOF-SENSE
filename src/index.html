@@ -13,35 +13,12 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.heat/0.2.0/leaflet-heat.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 </head>
 
 <body data-threat="NORMAL">
 
   <!-- ── BACKGROUND VIGNETTE (Pulses on Threat) ── -->
   <div id="vignette"></div>
-
-  <!-- ── SUPABASE CONFIG MODAL ── -->
-  <div class="modal-overlay" id="sbModal">
-    <div class="modal">
-      <h2>DB CONFIGURATION</h2>
-      <p>Enter your Supabase credentials to enable military-grade persistent threat logging. Leave blank for local-only
-        RAM mode.</p>
-      <div class="modal-field">
-        <label>PROJECT URL</label>
-        <input id="sbUrl" type="text" placeholder="https://xxxx.supabase.co" autocomplete="off" />
-      </div>
-      <div class="modal-field">
-        <label>ANON KEY</label>
-        <input id="sbKey" type="password" placeholder="eyJhbGciOiJIUzI1..." autocomplete="off" />
-      </div>
-      <div class="modal-actions">
-        <button class="tbtn" style="background:transparent; border:1px solid var(--txt-muted); color:var(--txt-muted);"
-          onclick="skipSupabase()">SKIP — LOCAL</button>
-        <button class="tbtn" style="background:var(--cyan); color:#000;" onclick="initSupabase()">CONNECT DB</button>
-      </div>
-    </div>
-  </div>
 
   <!-- ── FULL-SCREEN MAP ── -->
   <div id="map"></div>
@@ -83,19 +60,6 @@
 
     <div class="tb-divider"></div>
     <div class="theme-toggle" id="themeToggle" onclick="toggleTheme()" title="Toggle theme"></div>
-  </div>
-
-  <!-- ── DB SYNC STRIP ── -->
-  <div id="db-strip">
-    <div class="db-indicator">
-      <div class="db-dot err" id="dbDot"></div>
-      <span class="db-lbl">SUPABASE:</span>
-      <span class="db-val" id="dbStatus">DISCONNECTED</span>
-    </div>
-    <div class="db-indicator">
-      <span class="db-lbl">RECORDS:</span>
-      <span class="db-val" id="dbCount" style="color:var(--cyan)">0</span>
-    </div>
   </div>
 
   <!-- ── LEFT TELEMETRY PANEL ── -->
@@ -276,76 +240,25 @@
       }
     })();
 
-    // ── SUPABASE INTEGRATION ──────────────────────────────────────
+    // ── SUPABASE INTEGRATION (Disabled by default) ──
     let supabase = null, dbSaveCount = 0;
 
+    // Placeholder for initSupabase, as the modal is removed
     function initSupabase() {
-      const url = document.getElementById('sbUrl').value.trim();
-      const key = document.getElementById('sbKey').value.trim();
-      if (!url || !key) return alert('Credentials required.');
-      try {
-        supabase = window.supabase.createClient(url, key);
-        localStorage.setItem('sb-url', url); localStorage.setItem('sb-key', key);
-        document.getElementById('sbModal').style.display = 'none';
-        document.getElementById('dbDot').className = 'db-dot ok';
-        document.getElementById('dbStatus').textContent = 'CONNECTED';
-        toast('Database Uplink Established', 'db');
-        loadFromSupabase();
-      } catch (e) { alert('Connection Failed: ' + e.message); }
+      // This function would typically be called by a UI element if Supabase integration is desired.
+      // For now, it's a no-op or can be extended to show a different config UI.
+      console.log("Supabase initialization called, but modal is removed. Implement a new UI for config if needed.");
+      document.getElementById('dbStatus').textContent = 'LOCAL ONLY';
+      toast('Supabase config UI removed. Running in local-only memory mode.', 'info');
     }
 
     function skipSupabase() {
-      document.getElementById('sbModal').style.display = 'none';
       document.getElementById('dbStatus').textContent = 'LOCAL ONLY';
       toast('Running in local-only memory mode', 'info');
     }
 
-    (function () {
-      const url = localStorage.getItem('sb-url');
-      const key = localStorage.getItem('sb-key');
-      if (url && key) {
-        document.getElementById('sbUrl').value = url;
-        document.getElementById('sbKey').value = key;
-        setTimeout(initSupabase, 300);
-      }
-    })();
-
-    async function saveToSupabase(data) {
-      if (!supabase) return;
-      try {
-        const { error } = await supabase.from('gps_events').insert([{
-          status: data.status, latitude: data.lat, longitude: data.lng,
-          speed_mps: data.speed_mps, satellites: data.satellites, hdop: data.hdop,
-          ax: data.ax, ay: data.ay, az: data.az, gx: data.gx, gy: data.gy, gz: data.gz,
-          snr: data.snr || 0, created_at: new Date().toISOString()
-        }]);
-        if (!error) {
-          document.getElementById('dbCount').textContent = ++dbSaveCount;
-          document.getElementById('dbDot').className = 'db-dot ok';
-        } else document.getElementById('dbDot').className = 'db-dot err';
-      } catch (e) { document.getElementById('dbDot').className = 'db-dot err'; }
-    }
-
-    async function loadFromSupabase() {
-      if (!supabase) return;
-      try {
-        const today = new Date(); today.setHours(0, 0, 0, 0);
-        const { data, error } = await supabase.from('gps_events').select('*')
-          .gte('created_at', today.toISOString()).order('created_at', { ascending: false }).limit(200);
-        if (!error && data) {
-          dbSaveCount = data.length; document.getElementById('dbCount').textContent = dbSaveCount;
-          data.filter(r => r.status !== 'NORMAL').forEach(r => {
-            addAlertRow({
-              n: ++alertCount, ts: new Date(r.created_at).toLocaleTimeString(), event: r.status,
-              lat: Number(r.latitude).toFixed(4), lng: Number(r.longitude).toFixed(4),
-              detail: 'Database Sync Event', fromDB: true
-            });
-            heatData.push([Number(r.latitude), Number(r.longitude), r.status === 'SPOOFED' ? 1.0 : 0.6]);
-          });
-          refreshHeatmap();
-        }
-      } catch (e) { }
-    }
+// Supabase integration removed as per user request
+    function saveToSupabase(data) { /* No-op */ }
 
     // ── LEAFLET MAP ENGINE ────────────────────────────────────────
     const map = L.map('map', { zoomControl: true, attributionControl: false }).setView([20, 78], 5);
